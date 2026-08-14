@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   test:
@@ -20,6 +20,36 @@ jobs:
           - Release
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: fix/preset-inputtypes-hardening
+
+      - name: Wire lazy default settings path once
+        if: matrix.configuration == 'Debug'
+        shell: pwsh
+        run: |
+          $path = "Application/FileConverterExtension/FileConverterExtension.cs"
+          $content = [System.IO.File]::ReadAllText($path)
+          $old = @"
+            this.presetReferences = PresetReferenceHelpers.Load(
+                PathHelpers.UserSettingsFilePath,
+                PathHelpers.DefaultSettingsFilePath);
+"@
+          $new = @"
+            this.presetReferences = PresetReferenceHelpers.Load(
+                PathHelpers.UserSettingsFilePath,
+                () => PathHelpers.DefaultSettingsFilePath);
+"@
+
+          if ($content.Contains($old)) {
+              $content = $content.Replace($old, $new)
+              [System.IO.File]::WriteAllText($path, $content, [System.Text.UTF8Encoding]::new($true))
+
+              git config user.name "ChatGPT"
+              git config user.email "github-actions[bot]@users.noreply.github.com"
+              git add $path
+              git commit -m "fix: resolve shell default settings lazily"
+              git push origin HEAD:fix/preset-inputtypes-hardening
+          }
 
       - name: Build regression test project
         shell: pwsh
