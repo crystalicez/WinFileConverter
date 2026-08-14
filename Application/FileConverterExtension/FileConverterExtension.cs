@@ -78,12 +78,9 @@ namespace FileConverterExtension
             PresetReference[] presets = this.PresetReferences;
             foreach (string extension in this.extensionCache)
             {
-                foreach (PresetReference presetReference in presets)
+                if (PresetReferenceHelpers.AnySupportsExtension(presets, extension))
                 {
-                    if (presetReference.InputTypes.Contains(extension))
-                    {
-                        return true;
-                    }
+                    return true;
                 }
             }
 
@@ -209,13 +206,13 @@ namespace FileConverterExtension
             this.RefreshExtensionCacheFromSelectedItems();
 
             // Activate compatible menu entries.
-            PresetReference[] presets = this.presetReferences;
+            PresetReference[] presets = this.PresetReferences;
             this.menuEntries.Clear();
             foreach (string extension in this.extensionCache)
             {
                 foreach (PresetReference presetReference in presets)
                 {
-                    if (!presetReference.InputTypes.Contains(extension))
+                    if (!PresetReferenceHelpers.SupportsExtension(presetReference, extension))
                     {
                         continue;
                     }
@@ -245,27 +242,9 @@ namespace FileConverterExtension
                 return;
             }
 
-            if (File.Exists(PathHelpers.UserSettingsFilePath))
-            {
-                try
-                {
-                    XmlHelpers.LoadFromFile("Settings", PathHelpers.UserSettingsFilePath, out this.presetReferences);
-                    return;
-                }
-                catch
-                {
-                    // Can't handle this error in the explorer extension.
-                }
-            }
-
-            try
-            {
-                XmlHelpers.LoadFromFile("Settings", PathHelpers.DefaultSettingsFilePath, out this.presetReferences);
-            }
-            catch
-            {
-                // Can't handle this error in the explorer extension.
-            }
+            this.presetReferences = PresetReferenceHelpers.Load(
+                PathHelpers.UserSettingsFilePath,
+                PathHelpers.DefaultSettingsFilePath);
         }
 
         private void OpenSettings()
