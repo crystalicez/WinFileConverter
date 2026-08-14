@@ -18,7 +18,7 @@ namespace FileConverter
         private string shortName;
 
         private OutputType outputType;
-        private List<string> inputTypes;
+        private List<string> inputTypes = new List<string>();
         private InputPostConversionAction inputPostConversionAction;
         private ConversionSettings settings = new ConversionSettings();
         private string outputFileNameTemplate;
@@ -151,12 +151,8 @@ namespace FileConverter
 
             set
             {
-                this.inputTypes = value;
-                for (int index = 0; index < this.inputTypes.Count; index++)
-                {
-                    this.inputTypes[index] = this.inputTypes[index].ToLowerInvariant();
-                }
-                
+                this.inputTypes = value == null ? new List<string>() : new List<string>(value);
+                this.NormalizeInputTypes();
                 this.OnPropertyChanged();
             }
         }
@@ -292,16 +288,18 @@ namespace FileConverter
 
         public void OnDeserializationComplete()
         {
-            for (int index = 0; index < this.InputTypes.Count; index++)
-            {
-                this.InputTypes[index] = this.InputTypes[index].ToLowerInvariant();
-            }
-
+            this.NormalizeInputTypes();
             this.CoerceInputTypes();
         }
 
         public void AddInputType(string inputType)
         {
+            if (string.IsNullOrEmpty(inputType))
+            {
+                return;
+            }
+
+            inputType = inputType.ToLowerInvariant();
             if (this.inputTypes.Contains(inputType))
             {
                 return;
@@ -387,6 +385,27 @@ namespace FileConverter
         public bool IsRelevantSetting(string settingsKey)
         {
             return this.Settings.ContainsKey(settingsKey);
+        }
+
+        private void NormalizeInputTypes()
+        {
+            if (this.inputTypes == null)
+            {
+                this.inputTypes = new List<string>();
+                return;
+            }
+
+            for (int index = this.inputTypes.Count - 1; index >= 0; index--)
+            {
+                string inputType = this.inputTypes[index];
+                if (string.IsNullOrEmpty(inputType))
+                {
+                    this.inputTypes.RemoveAt(index);
+                    continue;
+                }
+
+                this.inputTypes[index] = inputType.ToLowerInvariant();
+            }
         }
 
         private void CoerceInputTypes()
