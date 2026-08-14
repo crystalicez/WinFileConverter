@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - fix/preset-inputtypes-hardening
+  pull_request:
+    branches:
+      - integration
   workflow_dispatch:
 
 jobs:
