@@ -46,11 +46,11 @@
 
 **Interfaces:**
 - Consumes: public `FileConverter.ConversionPreset`, `FileConverter.Settings`, and `FileConverter.XmlHelpers`.
-- Produces: x64 .NET Framework 4.8 MSTest project `FileConverter.Tests` used by all later tasks.
+- Produces: x64 .NET Framework 4.8 MSTest project `FileConverter.Tests` used by later tasks.
 
 - [ ] **Step 1: Create the x64 .NET Framework 4.8 MSTest project**
 
-Create `Tests/FileConverter.Tests/FileConverter.Tests.csproj` as an old-style project so it builds with the same full-framework MSBuild toolchain as the existing solution:
+Create `Tests/FileConverter.Tests/FileConverter.Tests.csproj` as an old-style project so it uses the same full-framework MSBuild toolchain as the existing solution:
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
@@ -89,7 +89,6 @@ Create `Tests/FileConverter.Tests/FileConverter.Tests.csproj` as an old-style pr
   <ItemGroup>
     <Compile Include="ConversionPresetTests.cs" />
     <Compile Include="SettingsTests.cs" />
-    <Compile Include="PresetReferenceHelpersTests.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Application\FileConverter\FileConverter.csproj">
@@ -133,6 +132,15 @@ namespace FileConverter.Tests
             var preset = new ConversionPreset("Empty", OutputType.Gif, "jpg");
 
             preset.InputTypes = null;
+
+            Assert.IsNotNull(preset.InputTypes);
+            Assert.AreEqual(0, preset.InputTypes.Count);
+        }
+
+        [TestMethod]
+        public void Constructor_WhenInputTypesArrayIsNull_ProducesEmptyCollection()
+        {
+            var preset = new ConversionPreset("Empty", OutputType.Gif, (string[])null);
 
             Assert.IsNotNull(preset.InputTypes);
             Assert.AreEqual(0, preset.InputTypes.Count);
@@ -231,7 +239,7 @@ namespace FileConverter.Tests
         }
 
         [TestMethod]
-        public void Clean_NullPreset_DoesNotThrow()
+        public void Clean_NullPreset_RemovesItWithoutThrowing()
         {
             var settings = new Settings();
             settings.ConversionPresets.Add(null);
@@ -242,30 +250,58 @@ namespace FileConverter.Tests
             Assert.AreEqual(1, settings.ConversionPresets.Count);
             Assert.IsNotNull(settings.ConversionPresets[0]);
         }
+
+        [TestMethod]
+        public void Merge_NullEntries_DoNotPreventValidPresetMerge()
+        {
+            var target = new Settings();
+            target.ConversionPresets.Add(null);
+
+            var source = new Settings();
+            source.ConversionPresets.Add(null);
+            source.ConversionPresets.Add(new ConversionPreset("Valid", OutputType.Gif, "jpg"));
+
+            target.Merge(source);
+
+            Assert.AreEqual(2, target.ConversionPresets.Count);
+            Assert.IsTrue(target.ConversionPresets.ExistsForTest("Valid"));
+        }
+    }
+
+    internal static class SettingsTestExtensions
+    {
+        public static bool ExistsForTest(this System.Collections.ObjectModel.ObservableCollection<ConversionPreset> presets, string fullName)
+        {
+            foreach (ConversionPreset preset in presets)
+            {
+                if (preset != null && preset.FullName == fullName)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
     }
 }
 ```
 
-- [ ] **Step 4: Restore/build tests and verify the regression tests fail before production changes**
+The `Merge` assertion deliberately expects the pre-existing null entry to remain because `Merge()` should skip malformed entries rather than silently perform cleanup; `Clean()` owns cleanup before save.
+
+- [ ] **Step 4: Restore/build and verify the tests fail for production behavior, not project setup**
 
 On Windows with Visual Studio 2022 or Build Tools installed:
 
 ```powershell
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
-& $msbuild FileConverter.sln /restore /t:Build /p:Configuration=Debug /p:Platform=x64
-```
-
-Expected: either build succeeds and the newly added tests fail when run, or the current `ConversionPreset.OnDeserializationComplete()` throws on the no-`InputTypes` case. Do not change production code until this failure is observed.
-
-Run tests:
-
-```powershell
 $vstest = & $vswhere -latest -products * -find "Common7\IDE\CommonExtensions\Microsoft\TestWindow\vstest.console.exe" | Select-Object -First 1
+
+& $msbuild FileConverter.sln /restore /t:Build /p:Configuration=Debug /p:Platform=x64
 & $vstest Tests\FileConverter.Tests\bin\x64\Debug\FileConverter.Tests.dll /Platform:x64
 ```
 
-Expected failures include `InputTypes_WhenAssignedNull_BecomesEmptyCollection`, `LoadPreset_WithoutInputTypes_ProducesEmptyCollection`, and settings null-array/null-entry cases.
+Expected: test assembly builds; tests fail because current production code dereferences null `InputTypes`, null serialized arrays, or null preset entries. Do not accept missing source files or test-discovery failures as the red phase.
 
 - [ ] **Step 5: Commit the failing regression tests**
 
@@ -286,11 +322,11 @@ git commit -m "test: cover malformed preset input types"
 
 **Interfaces:**
 - Consumes: existing `ConversionPreset.InputTypes`, `IXmlSerializable.OnDeserializationComplete()`, and `Settings.SerializableConversionPresets` serialization hooks.
-- Produces: `ConversionPreset.InputTypes` is always a non-null `List<string>` in memory; settings collection operations skip/remove null preset entries.
+- Produces: `ConversionPreset.InputTypes` is always a non-null `List<string>` in memory; settings collection operations tolerate null preset entries.
 
-- [ ] **Step 1: Add one normalization method and establish the field invariant**
+- [ ] **Step 1: Establish the field invariant with one normalization method**
 
-In `ConversionPreset.cs`, initialize the field and add a focused normalizer:
+In `ConversionPreset.cs`, initialize the field and add:
 
 ```csharp
 private List<string> inputTypes = new List<string>();
@@ -317,9 +353,21 @@ private void NormalizeInputTypes()
 }
 ```
 
-Keep normalization deliberately narrow: null/empty entries are removed and non-empty extensions are lower-cased. Do not trim, deduplicate, or otherwise change existing semantics.
+Keep normalization narrow: remove null/empty entries and lower-case non-empty extensions. Do not trim, deduplicate, or otherwise change semantics.
 
-- [ ] **Step 2: Normalize `InputTypes` assignments and deserialization**
+- [ ] **Step 2: Normalize construction, assignment, and deserialization**
+
+In the constructor taking `params string[] inputTypes`, replace unconditional `AddRange` with:
+
+```csharp
+List<string> inputTypeList = new List<string>();
+if (inputTypes != null)
+{
+    inputTypeList.AddRange(inputTypes);
+}
+
+this.InputTypes = inputTypeList;
+```
 
 Replace the `InputTypes` setter body with:
 
@@ -339,7 +387,7 @@ this.NormalizeInputTypes();
 this.CoerceInputTypes();
 ```
 
-At the start of `AddInputType`, reject null/empty values and normalize case before comparison:
+At the start of `AddInputType`, add:
 
 ```csharp
 if (string.IsNullOrEmpty(inputType))
@@ -391,18 +439,52 @@ set
 }
 ```
 
-In `Merge(Settings settings)`, skip a null `conversionPreset` before using `FullName`. In `OnDeserializationComplete()`, iterate backwards, remove null entries, and call `OnDeserializationComplete()` only on valid presets.
+In `Merge(Settings settings)`, use these exact guards:
+
+```csharp
+for (int index = 0; index < settings.conversionPresets.Count; index++)
+{
+    ConversionPreset conversionPreset = settings.conversionPresets[index];
+    if (conversionPreset == null)
+    {
+        continue;
+    }
+
+    if (this.conversionPresets.Any(match => match != null && match.FullName == conversionPreset.FullName))
+    {
+        continue;
+    }
+
+    this.conversionPresets.Add(conversionPreset);
+}
+```
+
+In `OnDeserializationComplete()`, iterate backwards and remove null presets before invoking their completion hooks:
+
+```csharp
+for (int index = this.ConversionPresets.Count - 1; index >= 0; index--)
+{
+    ConversionPreset preset = this.ConversionPresets[index];
+    if (preset == null)
+    {
+        this.ConversionPresets.RemoveAt(index);
+        continue;
+    }
+
+    preset.OnDeserializationComplete();
+}
+```
 
 - [ ] **Step 4: Run model/settings tests and verify they pass**
 
 ```powershell
 & $msbuild FileConverter.sln /restore /t:Build /p:Configuration=Debug /p:Platform=x64
-& $vstest Tests\FileConverter.Tests\bin\x64\Debug\FileConverter.Tests.dll /Platform:x64 /Tests:InputTypes_WhenAssignedNull_BecomesEmptyCollection,LoadPreset_WithoutInputTypes_ProducesEmptyCollection,EmptyInputTypes_RoundTrip_RemainsNonNull,InputTypes_NullAndEmptyEntries_AreRemovedDuringNormalization,SerializableConversionPresets_NullArray_IsIgnored,SerializableConversionPresets_NullEntry_IsSkipped,Clean_NullPreset_DoesNotThrow
+& $vstest Tests\FileConverter.Tests\bin\x64\Debug\FileConverter.Tests.dll /Platform:x64
 ```
 
-Expected: all listed tests pass.
+Expected: all Task 1 tests pass.
 
-- [ ] **Step 5: Commit the main application hardening**
+- [ ] **Step 5: Commit main application hardening**
 
 ```bash
 git add Application/FileConverter/ConversionPreset/ConversionPreset.cs Application/FileConverter/Settings.cs
@@ -419,10 +501,11 @@ git commit -m "fix: normalize preset input types"
 - Modify: `Application/FileConverterExtension/FileConverterExtension.cs`
 - Modify: `Application/FileConverterExtension/FileConverterExtension.csproj`
 - Create: `Tests/FileConverter.Tests/PresetReferenceHelpersTests.cs`
+- Modify: `Tests/FileConverter.Tests/FileConverter.Tests.csproj`
 
 **Interfaces:**
 - Consumes: `PresetReference[]`, user/default settings paths, and `FileConverterExtension.XmlHelpers.LoadFromFile<T>()`.
-- Produces: `PresetReferenceHelpers.Load(string userSettingsFilePath, string defaultSettingsFilePath) -> PresetReference[]` and `PresetReferenceHelpers.SupportsExtension(PresetReference preset, string extension) -> bool`.
+- Produces: `PresetReferenceHelpers.Load(string userSettingsFilePath, string defaultSettingsFilePath) -> PresetReference[]`, `PresetReferenceHelpers.SupportsExtension(PresetReference preset, string extension) -> bool`, and `PresetReferenceHelpers.AnySupportsExtension(PresetReference[] presets, string extension) -> bool`.
 
 - [ ] **Step 1: Write failing shell-boundary tests**
 
@@ -448,17 +531,33 @@ namespace FileConverter.Tests
         [TestMethod]
         public void SupportsExtension_PresetWithoutInputTypes_ReturnsFalse()
         {
-            var preset = new Shell.PresetReference { InputTypes = null };
+            Shell.PresetReference preset = CreatePresetReference(null);
 
             Assert.IsFalse(Shell.PresetReferenceHelpers.SupportsExtension(preset, "jpg"));
         }
 
         [TestMethod]
-        public void SupportsExtension_ValidPreset_ReturnsTrue()
+        public void AnySupportsExtension_MalformedPresetBeforeValidPreset_ReturnsTrue()
         {
-            var preset = new Shell.PresetReference { InputTypes = new[] { "jpg", "png" } };
+            var presets = new[]
+            {
+                CreatePresetReference(null),
+                CreatePresetReference(new[] { "jpg", "png" }),
+            };
 
-            Assert.IsTrue(Shell.PresetReferenceHelpers.SupportsExtension(preset, "jpg"));
+            Assert.IsTrue(Shell.PresetReferenceHelpers.AnySupportsExtension(presets, "jpg"));
+        }
+
+        [TestMethod]
+        public void AnySupportsExtension_OnlyMalformedOrEmptyPresets_ReturnsFalse()
+        {
+            var presets = new[]
+            {
+                CreatePresetReference(null),
+                CreatePresetReference(new string[0]),
+            };
+
+            Assert.IsFalse(Shell.PresetReferenceHelpers.AnySupportsExtension(presets, "jpg"));
         }
 
         [TestMethod]
@@ -510,20 +609,25 @@ namespace FileConverter.Tests
             string user = Path.Combine(root, "Settings.user.xml");
             try
             {
-                File.WriteAllText(user,
-                    "<Settings><ConversionPreset Name=\"Broken\" /></Settings>");
+                File.WriteAllText(user, "<Settings><ConversionPreset Name=\"Broken\" /></Settings>");
 
                 var presets = Shell.PresetReferenceHelpers.Load(user, Path.Combine(root, "missing-default.xml"));
 
                 Assert.AreEqual(1, presets.Length);
                 Assert.IsNotNull(presets[0].InputTypes);
                 Assert.AreEqual(0, presets[0].InputTypes.Length);
-                Assert.IsFalse(Shell.PresetReferenceHelpers.SupportsExtension(presets[0], "jpg"));
             }
             finally
             {
                 Directory.Delete(root, true);
             }
+        }
+
+        private static Shell.PresetReference CreatePresetReference(string[] inputTypes)
+        {
+            var preset = (Shell.PresetReference)Activator.CreateInstance(typeof(Shell.PresetReference), true);
+            preset.InputTypes = inputTypes;
+            return preset;
         }
 
         private static string CreateTempDirectory()
@@ -536,11 +640,17 @@ namespace FileConverter.Tests
 }
 ```
 
-Run the test assembly. Expected: build fails because `PresetReferenceHelpers` does not exist yet; this is the intentional red phase.
+Add this compile item to `Tests/FileConverter.Tests/FileConverter.Tests.csproj` only in this task:
+
+```xml
+<Compile Include="PresetReferenceHelpersTests.cs" />
+```
+
+Run build. Expected: compilation fails because `PresetReferenceHelpers` does not exist yet; this is the intentional red phase.
 
 - [ ] **Step 2: Make `PresetReference.InputTypes` non-null by construction and assignment**
 
-In `ConversionPresetReference.cs`, add `using System;`, replace the auto-property with a backing field, and keep the XML contract unchanged:
+In `ConversionPresetReference.cs`, add `using System;`, replace the auto-property with:
 
 ```csharp
 private string[] inputTypes = Array.Empty<string>();
@@ -553,7 +663,7 @@ public string[] InputTypes
 }
 ```
 
-Do not add a wrapper XML element and do not change `[XmlElement]`.
+Keep the private parameterless constructor and the existing `[XmlElement]` contract unchanged.
 
 - [ ] **Step 3: Implement the focused shell helper**
 
@@ -576,6 +686,24 @@ namespace FileConverterExtension
 
             string[] inputTypes = preset.InputTypes ?? Array.Empty<string>();
             return Array.IndexOf(inputTypes, extension) >= 0;
+        }
+
+        public static bool AnySupportsExtension(PresetReference[] presets, string extension)
+        {
+            if (presets == null)
+            {
+                return false;
+            }
+
+            foreach (PresetReference preset in presets)
+            {
+                if (SupportsExtension(preset, extension))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         public static PresetReference[] Load(string userSettingsFilePath, string defaultSettingsFilePath)
@@ -618,25 +746,22 @@ namespace FileConverterExtension
 
 Add `<Compile Include="PresetReferenceHelpers.cs" />` to `FileConverterExtension.csproj`.
 
-- [ ] **Step 4: Delegate shell loading and matching to the safe boundary**
+- [ ] **Step 4: Delegate shell matching to the safe helper**
 
-In `FileConverterExtension.CanShowMenu()`, keep selected-extension collection unchanged but replace direct `InputTypes.Contains()` calls with:
+Replace the inner preset loop in `CanShowMenu()` with one helper call per selected extension:
 
 ```csharp
 PresetReference[] presets = this.PresetReferences;
 foreach (string extension in this.extensionCache)
 {
-    foreach (PresetReference presetReference in presets)
+    if (PresetReferenceHelpers.AnySupportsExtension(presets, extension))
     {
-        if (PresetReferenceHelpers.SupportsExtension(presetReference, extension))
-        {
-            return true;
-        }
+        return true;
     }
 }
 ```
 
-In `RefreshPresetList()`, use `this.PresetReferences` rather than the backing field and skip unsupported/malformed entries:
+In `RefreshPresetList()`, load through `this.PresetReferences` and use `SupportsExtension`:
 
 ```csharp
 PresetReference[] presets = this.PresetReferences;
@@ -663,7 +788,9 @@ foreach (string extension in this.extensionCache)
 }
 ```
 
-Replace `LoadExtensionSettingsIfNecessary()` with one load call while retaining `null` as the lazy-load sentinel:
+- [ ] **Step 5: Make configured-path resolution and settings loading fail-safe**
+
+Replace `LoadExtensionSettingsIfNecessary()` with:
 
 ```csharp
 private void LoadExtensionSettingsIfNecessary()
@@ -673,27 +800,48 @@ private void LoadExtensionSettingsIfNecessary()
         return;
     }
 
+    string userSettingsFilePath = null;
+    string defaultSettingsFilePath = null;
+
+    try
+    {
+        userSettingsFilePath = PathHelpers.UserSettingsFilePath;
+    }
+    catch
+    {
+        // Explorer extensions must fail closed when settings paths cannot be resolved.
+    }
+
+    try
+    {
+        defaultSettingsFilePath = PathHelpers.DefaultSettingsFilePath;
+    }
+    catch
+    {
+        // Explorer extensions must fail closed when settings paths cannot be resolved.
+    }
+
     this.presetReferences = PresetReferenceHelpers.Load(
-        PathHelpers.UserSettingsFilePath,
-        PathHelpers.DefaultSettingsFilePath);
+        userSettingsFilePath,
+        defaultSettingsFilePath);
 }
 ```
 
-This guarantees that once loading has been attempted, `presetReferences` is non-null even when both files are missing or invalid.
+This keeps `null` as the lazy-load sentinel before the first attempt and guarantees a non-null array afterwards.
 
-- [ ] **Step 5: Run shell regression tests and the complete test assembly**
+- [ ] **Step 6: Run shell regression tests and complete test assembly**
 
 ```powershell
 & $msbuild FileConverter.sln /restore /t:Build /p:Configuration=Debug /p:Platform=x64
 & $vstest Tests\FileConverter.Tests\bin\x64\Debug\FileConverter.Tests.dll /Platform:x64
 ```
 
-Expected: all tests pass, including corrupt-user fallback, no-input preset handling, and valid `.jpg` matching.
+Expected: all tests pass, including malformed-before-valid `.jpg` matching, corrupt-user fallback, and no-input preset handling.
 
-- [ ] **Step 6: Commit shell hardening**
+- [ ] **Step 7: Commit shell hardening**
 
 ```bash
-git add Application/FileConverterExtension Tests/FileConverter.Tests/PresetReferenceHelpersTests.cs
+git add Application/FileConverterExtension Tests/FileConverter.Tests/PresetReferenceHelpersTests.cs Tests/FileConverter.Tests/FileConverter.Tests.csproj
 git commit -m "fix: harden shell preset loading"
 ```
 
@@ -725,7 +873,7 @@ if ($LASTEXITCODE -ne 0) { throw "Release x64 build failed" }
 
 Expected: both builds exit with code 0.
 
-- [ ] **Step 2: Run all regression tests against the Debug x64 build**
+- [ ] **Step 2: Run all regression tests against Debug x64**
 
 ```powershell
 & $vstest Tests\FileConverter.Tests\bin\x64\Debug\FileConverter.Tests.dll /Platform:x64
@@ -740,36 +888,34 @@ Expected: all tests pass with zero failures.
 git diff integration...HEAD -- Application/FileConverter/Settings.cs Application/FileConverter/ConversionPreset/ConversionPreset.cs Application/FileConverterExtension/ConversionPresetReference.cs
 ```
 
-Confirm all of the following from the diff:
+Confirm:
 
 - `Settings.Version` remains `4`.
 - `InputTypes` retains `[XmlElement]` in both model representations.
-- No `<InputTypes>` wrapper type or migration code was added.
+- No wrapper element or settings migration was added.
 - Empty input lists remain representable.
 
 - [ ] **Step 4: Reproduce the original Windows 11 case with a zero-input preset**
 
-On the Windows 11 test machine:
-
-1. Install/build the hardened extension and ensure the shell extension is registered.
-2. In File Converter settings, create a preset named `Scale 25%/To Gif 15fps` and leave all input types unchecked.
-3. Save settings and verify `Settings.user.xml` may contain that preset without any `InputTypes` elements.
+1. Install/register the hardened build on the Windows 11 test machine.
+2. In File Converter settings, create `Scale 25%/To Gif 15fps` and leave all input types unchecked.
+3. Save settings and confirm the preset may serialize with no `InputTypes` elements.
 4. Restart Explorer.
-5. Right-click a `.jpg` that is supported by another valid preset and choose **Show more options**.
-6. Verify **File Converter** is present and the valid `.jpg` presets are available.
+5. Right-click a `.jpg` supported by another valid preset and choose **Show more options**.
+6. Verify **File Converter** is present and valid `.jpg` presets are available.
 7. Verify the zero-input preset is not offered for the `.jpg`.
 
 - [ ] **Step 5: Verify SharpShell no longer reports the original exception**
 
-With SharpShell file logging enabled as used during diagnosis, trigger the legacy menu once and inspect the log:
+With the diagnostic file logging used during root-cause analysis enabled, trigger the menu once and run:
 
 ```powershell
 Get-Content "C:\Temp\SharpShell.log" | Select-String "ArgumentNullException|CanShowMenu|Query Context Menu"
 ```
 
-Expected: `Query Context Menu` may be present, but there is no `ArgumentNullException` from `Enumerable.Contains` / `FileConverterExtension.CanShowMenu()`.
+Expected: `Query Context Menu` may appear, but no `ArgumentNullException` from `Enumerable.Contains` / `FileConverterExtension.CanShowMenu()` appears.
 
-- [ ] **Step 6: Final diff review before merge/PR**
+- [ ] **Step 6: Final diff review before merge or PR**
 
 ```bash
 git status --short
@@ -777,4 +923,4 @@ git diff --check integration...HEAD
 git log --oneline integration..HEAD
 ```
 
-Expected: clean working tree, no whitespace errors, and commits are limited to regression tests, main-model normalization, shell hardening, plus the approved design/plan documentation.
+Expected: clean working tree, no whitespace errors, and commits limited to tests, model normalization, shell hardening, and the approved design/plan documentation.
