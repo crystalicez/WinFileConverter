@@ -31,9 +31,16 @@ namespace FileConverter
 
         public void Clean()
         {
-            for (int index = 0; index < this.ConversionPresets.Count; index++)
+            for (int index = this.ConversionPresets.Count - 1; index >= 0; index--)
             {
-                this.ConversionPresets[index].Clean();
+                ConversionPreset preset = this.ConversionPresets[index];
+                if (preset == null)
+                {
+                    this.ConversionPresets.RemoveAt(index);
+                    continue;
+                }
+
+                preset.Clean();
             }
         }
         
@@ -47,7 +54,12 @@ namespace FileConverter
             for (int index = 0; index < settings.conversionPresets.Count; index++)
             {
                 ConversionPreset conversionPreset = settings.conversionPresets[index];
-                if (this.conversionPresets.Any(match => match.FullName == conversionPreset.FullName))
+                if (conversionPreset == null)
+                {
+                    continue;
+                }
+
+                if (this.conversionPresets.Any(match => match != null && match.FullName == conversionPreset.FullName))
                 {
                     continue;
                 }
@@ -186,9 +198,18 @@ namespace FileConverter
 
             set
             {
+                if (value == null)
+                {
+                    return;
+                }
+
                 for (int index = 0; index < value.Length; index++)
                 {
-                    this.ConversionPresets.Add(value[index]);
+                    ConversionPreset preset = value[index];
+                    if (preset != null)
+                    {
+                        this.ConversionPresets.Add(preset);
+                    }
                 }
             }
         }
@@ -241,9 +262,16 @@ namespace FileConverter
         {
             this.DurationBetweenEndOfConversionsAndApplicationExit = System.Math.Max(0, System.Math.Min(10, this.DurationBetweenEndOfConversionsAndApplicationExit));
 
-            for (int index = 0; index < this.ConversionPresets.Count; index++)
+            for (int index = this.ConversionPresets.Count - 1; index >= 0; index--)
             {
-                this.ConversionPresets[index].OnDeserializationComplete();
+                ConversionPreset preset = this.ConversionPresets[index];
+                if (preset == null)
+                {
+                    this.ConversionPresets.RemoveAt(index);
+                    continue;
+                }
+
+                preset.OnDeserializationComplete();
             }
 
             // Initialize application if it was not deserialized from the settings.
