@@ -49,9 +49,27 @@ namespace FileConverterExtension
 
         public static PresetReference[] Load(string userSettingsPath, string defaultSettingsPath)
         {
+            return Load(userSettingsPath, () => defaultSettingsPath);
+        }
+
+        public static PresetReference[] Load(string userSettingsPath, Func<string> defaultSettingsPathProvider)
+        {
             if (TryLoad(userSettingsPath, out PresetReference[] presets))
             {
                 return Normalize(presets);
+            }
+
+            string defaultSettingsPath = null;
+            if (defaultSettingsPathProvider != null)
+            {
+                try
+                {
+                    defaultSettingsPath = defaultSettingsPathProvider();
+                }
+                catch
+                {
+                    return Array.Empty<PresetReference>();
+                }
             }
 
             if (TryLoad(defaultSettingsPath, out presets))
