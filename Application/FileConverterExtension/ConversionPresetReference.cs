@@ -2,6 +2,7 @@
 
 namespace FileConverterExtension
 {
+    using System;
     using System.Xml.Serialization;
 
     [XmlRoot("ConversionPreset")]
@@ -12,6 +13,7 @@ namespace FileConverterExtension
 
         private PresetReference()
         {
+            this.InputTypes = Array.Empty<string>();
         }
 
         [XmlAttribute("Name")]
@@ -54,6 +56,14 @@ namespace FileConverterExtension
         {
             get;
             private set;
+        }
+
+        internal void Normalize()
+        {
+            if (this.InputTypes == null)
+            {
+                this.InputTypes = Array.Empty<string>();
+            }
         }
     }
 }
