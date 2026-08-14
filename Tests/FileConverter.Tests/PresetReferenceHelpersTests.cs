@@ -90,6 +90,35 @@ namespace FileConverter.Tests
         }
 
         [TestMethod]
+        public void Load_ValidUserSettings_DoesNotResolveDefaultSettingsPath()
+        {
+            string root = CreateTempDirectory();
+            string user = Path.Combine(root, "Settings.user.xml");
+            try
+            {
+                File.WriteAllText(user,
+                    "<Settings><ConversionPreset Name=\"Valid\"><InputTypes>jpg</InputTypes></ConversionPreset></Settings>");
+                bool defaultPathResolved = false;
+
+                Shell.PresetReference[] presets = Shell.PresetReferenceHelpers.Load(
+                    user,
+                    () =>
+                    {
+                        defaultPathResolved = true;
+                        throw new InvalidOperationException("Default settings path should not be resolved.");
+                    });
+
+                Assert.IsFalse(defaultPathResolved);
+                Assert.AreEqual(1, presets.Length);
+                Assert.IsTrue(Shell.PresetReferenceHelpers.SupportsExtension(presets[0], "jpg"));
+            }
+            finally
+            {
+                Directory.Delete(root, true);
+            }
+        }
+
+        [TestMethod]
         public void Load_PresetWithoutInputTypes_LeavesSafeEmptyArray()
         {
             string root = CreateTempDirectory();
