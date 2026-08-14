@@ -7,135 +7,19 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration:
+          - Debug
+          - Release
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: fix/preset-inputtypes-hardening
-
-      - name: Apply shell wiring patch once
-        shell: pwsh
-        run: |
-          function Replace-ExactLines {
-              param(
-                  [string]$Path,
-                  [string[]]$OldLines,
-                  [string[]]$NewLines
-              )
-
-              $content = [System.IO.File]::ReadAllText($Path)
-              $newline = if ($content.Contains("`r`n")) { "`r`n" } else { "`n" }
-              $old = [string]::Join($newline, $OldLines)
-              $new = [string]::Join($newline, $NewLines)
-              $first = $content.IndexOf($old, [System.StringComparison]::Ordinal)
-
-              if ($first -lt 0) {
-                  return $false
-              }
-
-              $second = $content.IndexOf($old, $first + $old.Length, [System.StringComparison]::Ordinal)
-              if ($second -ge 0) {
-                  throw "Expected exactly one match in $Path"
-              }
-
-              $content = $content.Remove($first, $old.Length).Insert($first, $new)
-              [System.IO.File]::WriteAllText($Path, $content, [System.Text.UTF8Encoding]::new($true))
-              return $true
-          }
-
-          $path = "Application/FileConverterExtension/FileConverterExtension.cs"
-          $changed = $false
-
-          $changed = (Replace-ExactLines $path @(
-              '            PresetReference[] presets = this.PresetReferences;'
-              '            foreach (string extension in this.extensionCache)'
-              '            {'
-              '                foreach (PresetReference presetReference in presets)'
-              '                {'
-              '                    if (presetReference.InputTypes.Contains(extension))'
-              '                    {'
-              '                        return true;'
-              '                    }'
-              '                }'
-              '            }'
-          ) @(
-              '            PresetReference[] presets = this.PresetReferences;'
-              '            foreach (string extension in this.extensionCache)'
-              '            {'
-              '                if (PresetReferenceHelpers.AnySupportsExtension(presets, extension))'
-              '                {'
-              '                    return true;'
-              '                }'
-              '            }'
-          )) -or $changed
-
-          $changed = (Replace-ExactLines $path @(
-              '            PresetReference[] presets = this.presetReferences;'
-          ) @(
-              '            PresetReference[] presets = this.PresetReferences;'
-          )) -or $changed
-
-          $changed = (Replace-ExactLines $path @(
-              '                    if (!presetReference.InputTypes.Contains(extension))'
-          ) @(
-              '                    if (!PresetReferenceHelpers.SupportsExtension(presetReference, extension))'
-          )) -or $changed
-
-          $changed = (Replace-ExactLines $path @(
-              '        private void LoadExtensionSettingsIfNecessary()'
-              '        {'
-              '            if (this.presetReferences != null)'
-              '            {'
-              '                return;'
-              '            }'
-              ''
-              '            if (File.Exists(PathHelpers.UserSettingsFilePath))'
-              '            {'
-              '                try'
-              '                {'
-              '                    XmlHelpers.LoadFromFile("Settings", PathHelpers.UserSettingsFilePath, out this.presetReferences);'
-              '                    return;'
-              '                }'
-              '                catch'
-              '                {'
-              '                    // Can''t handle this error in the explorer extension.'
-              '                }'
-              '            }'
-              ''
-              '            try'
-              '            {'
-              '                XmlHelpers.LoadFromFile("Settings", PathHelpers.DefaultSettingsFilePath, out this.presetReferences);'
-              '            }'
-              '            catch'
-              '            {'
-              '                // Can''t handle this error in the explorer extension.'
-              '            }'
-              '        }'
-          ) @(
-              '        private void LoadExtensionSettingsIfNecessary()'
-              '        {'
-              '            if (this.presetReferences != null)'
-              '            {'
-              '                return;'
-              '            }'
-              ''
-              '            this.presetReferences = PresetReferenceHelpers.Load('
-              '                PathHelpers.UserSettingsFilePath,'
-              '                PathHelpers.DefaultSettingsFilePath);'
-              '        }'
-          )) -or $changed
-
-          if ($changed) {
-              git config user.name "ChatGPT"
-              git config user.email "github-actions[bot]@users.noreply.github.com"
-              git add $path
-              git commit -m "fix: use safe shell preset loading and matching"
-              git push origin HEAD:fix/preset-inputtypes-hardening
-          }
 
       - name: Build regression test project
         shell: pwsh
@@ -144,7 +28,7 @@ jobs:
           $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
           if (-not $msbuild) { throw "MSBuild not found" }
 
-          & $msbuild Tests\FileConverter.Tests\FileConverter.Tests.csproj /restore /t:Build /p:Configuration=Debug /p:Platform=x64
+          & $msbuild Tests\FileConverter.Tests\FileConverter.Tests.csproj /restore /t:Build /p:Configuration=${{ matrix.configuration }} /p:Platform=x64
           if ($LASTEXITCODE -ne 0) { throw "Build failed with exit code $LASTEXITCODE" }
 
       - name: Run regression tests
@@ -154,5 +38,5 @@ jobs:
           $vstest = & $vswhere -latest -products * -find "Common7\IDE\CommonExtensions\Microsoft\TestWindow\vstest.console.exe" | Select-Object -First 1
           if (-not $vstest) { throw "vstest.console.exe not found" }
 
-          & $vstest Tests\FileConverter.Tests\bin\x64\Debug\FileConverter.Tests.dll /Platform:x64
+          & $vstest Tests\FileConverter.Tests\bin\x64\${{ matrix.configuration }}\FileConverter.Tests.dll /Platform:x64
           if ($LASTEXITCODE -ne 0) { throw "Tests failed with exit code $LASTEXITCODE" }
