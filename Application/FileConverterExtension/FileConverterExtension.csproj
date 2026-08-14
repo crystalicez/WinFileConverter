@@ -60,6 +60,7 @@
   <ItemGroup>
     <Compile Include="FileConverterExtension.cs" />
     <Compile Include="ConversionPresetReference.cs" />
+    <Compile Include="PresetReferenceHelpers.cs" />
     <Compile Include="PathHelpers.cs" />
     <Compile Include="Properties\AssemblyInfo.cs">
       <ExcludeFromStyleCop>true</ExcludeFromStyleCop>
