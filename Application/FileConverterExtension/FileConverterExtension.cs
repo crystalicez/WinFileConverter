@@ -244,7 +244,7 @@ namespace FileConverterExtension
 
             this.presetReferences = PresetReferenceHelpers.Load(
                 PathHelpers.UserSettingsFilePath,
-                PathHelpers.DefaultSettingsFilePath);
+                () => PathHelpers.DefaultSettingsFilePath);
         }
 
         private void OpenSettings()
